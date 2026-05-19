@@ -1,0 +1,81 @@
+{
+  "problem_id": "3",
+  "run_label": "v3_openai",
+  "provider": "openai",
+  "worker_model": "gpt-4.1",
+  "problem_description": "There are 15 candidate plants F1\u2013F15. Each plant can either be built (opened) or not. Building a plant incurs a fixed opening cost, and this cost is charged only once per plant, independent of how many customers the plant eventually serves. Once a plant is opened, it may supply products to any customers, subject to its own capacity.\n\nThere are 15 customers C1\u2013C15 with fixed demands. If a plant is built, it incurs the fixed cost and can distribute to any number of customers. Shipping from plant i to customer j incurs a per-unit transport cost. The objective is to determine which plants should be built and how much to ship from each built plant to each customer in order to minimize the total cost, consisting of both fixed opening costs and variable transportation costs, while satisfying all customer demands and not exceeding the capacities of the opened plants.\n\nThe input data are given in two CSV files. cost.csv includes fixed_cost: opening cost of the plant (currency units; paid once if the plant is opened, regardless of the number of customers served). And capacity: plant capacity (maximum units the plant can supply). And also C1 \u2026 C15: per-unit transport cost from this plant to each customer. demand.csv includes demand of the customer (units) (C1-C15)",
+  "ground_truth": "import gurobipy as gp\nfrom gurobipy import GRB\n\n# ================================\n# Capacitated Facility Location (15 customers \u00d7 10 centres)\n# Capacity: each opened centre may serve at most 4 customers\n# Data consistent with the modeling and CSVs previously provided\n# ================================\n\n# Sets\ncustomers = range(1, 16)  # C1..C15\ncentres   = range(1, 11)  # SC1..SC10\n\n# Fixed opening costs F_j for centres SC1..SC10\nfixed_cost_list = [385.1, 546.3, 485.2, 448.1, 324.1, 323.9, 296.5, 522.7, 448.7, 478.7]\nfixed_cost = {j: fixed_cost_list[j-1] for j in centres}\n\n# Assignment (service) cost matrix c_{ij}: rows = customers C1..C15, cols = centres SC1..SC10\nservice_cost_matrix = [\n    # SC1   SC2   SC3   SC4   SC5   SC6   SC7   SC8   SC9   SC10\n    [15.1, 21.2, 14.9, 18.8, 22.9, 16.8, 16.5,  9.4, 16.1, 17.3],  # C1\n    [13.4, 16.3, 20.2, 19.6, 20.9, 22.1, 16.9,  9.4, 13.8, 11.7],  # C2\n    [15.2, 18.8, 14.7, 21.7, 18.1, 18.6, 12.3, 11.2, 11.9, 20.4],  # C3\n    [16.8, 19.1, 18.3, 18.8, 23.1, 15.7, 13.1,  8.6, 15.6, 22.2],  # C4\n    [13.4, 18.6, 20.8, 19.8, 22.1, 18.1, 16.7, 12.1, 11.4, 18.2],  # C5\n    [12.5, 22.5, 15.5, 14.9, 21.6, 21.3, 16.1, 10.7, 11.9, 14.6],  # C6\n    [12.1, 17.1, 19.8, 18.6, 22.1, 20.7, 20.5, 12.2, 15.4, 18.7],  # C7\n    [12.3, 15.7, 17.9, 21.3, 22.7, 15.3, 16.6, 11.4, 14.1, 20.1],  # C8\n    [16.3, 21.3, 17.6, 20.8, 21.8, 17.2, 15.5, 12.6, 19.9, 19.1],  # C9\n    [12.1, 18.7, 14.4, 20.1, 22.7, 14.1, 18.1, 11.4, 18.1, 17.4],  # C10\n    [16.7, 18.7, 15.7, 19.9, 24.2, 18.7, 14.2, 13.1, 14.7, 16.1],  # C11\n    [11.3, 23.8, 15.5, 17.3, 23.2, 17.7, 16.8, 14.5, 15.8, 17.8],  # C12\n    [15.1, 20.5, 15.1, 18.4, 20.6, 17.9, 14.5,  8.5, 14.9, 13.9],  # C13\n    [ 8.3, 20.7, 14.7, 20.4, 20.6, 14.8, 14.2, 11.5, 14.1, 15.1],  # C14\n    [12.1, 16.3, 16.4, 15.1, 21.3, 19.1, 19.5, 16.7, 11.1, 18.7],  # C15\n]\n\n# Build assignment cost dict {(i,j): c_ij}\nassign_cost = {(i, j): service_cost_matrix[i-1][j-1] for i in customers for j in centres}\n\n# Capacity: each opened centre can serve at most 4 customers\ncap = 4\n\n# ----------------\n# Model\n# ----------------\nm = gp.Model(\"Facility_Location_Capacity_4\")\n\n# Decision variables\ny = m.addVars(centres, vtype=GRB.BINARY, name=\"y\")                     # y_j = 1 if centre j is opened\nx = m.addVars(customers, centres, vtype=GRB.BINARY, name=\"x\")          # x_ij = 1 if customer i served by centre j\n\n# Objective: minimize total fixed + assignment costs\nm.setObjective(\n    gp.quicksum(fixed_cost[j] * y[j] for j in centres) +\n    gp.quicksum(assign_cost[(i, j)] * x[i, j] for i in customers for j in centres),\n    GRB.MINIMIZE\n)\n\n# Constraints:\n# 1) Each customer assigned to exactly one centre\nfor i in customers:\n    m.addConstr(gp.quicksum(x[i, j] for j in centres) == 1, name=f\"assign_{i}\")\n\n# 2) Assignment only allowed to open centres\nfor i in customers:\n    for j in centres:\n        m.addConstr(x[i, j] <= y[j], name=f\"openlink_{i}_{j}\")\n\n# 3) Capacity: each opened centre serves at most 4 customers\nfor j in centres:\n    m.addConstr(gp.quicksum(x[i, j] for i in customers) <= cap * y[j], name=f\"capacity_{j}\")\n\n# (Optional) MIP settings\n# m.Params.MIPFocus = 1\n# m.Params.TimeLimit = 60\n\n# Solve\nm.optimize()\n\n# ----------------\n# Reporting\n# ----------------\nif m.Status == GRB.OPTIMAL:\n    print(f\"Optimal objective value (total cost): {m.ObjVal:.3f}\")\n\n    open_centres = [j for j in centres if y[j].X > 0.5]\n    print(f\"Opened centres: {open_centres}\")\n\n    # Customer \u2192 Centre assignment\n    assignment = {}\n    for i in customers:\n        for j in centres:\n            if x[i, j].X > 0.5:\n                assignment[i] = j\n                break\n\n    print(\"Assignments (customer -> centre):\")\n    for i in customers:\n        print(f\"  C{i} -> SC{assignment[i]} (cost {assign_cost[(i, assignment[i])]:.1f})\")\n\n    # Cost breakdown\n    fixed_total = sum(fixed_cost[j] for j in open_centres)\n    var_total = sum(assign_cost[(i, assignment[i])] for i in customers)\n    print(f\"Fixed cost total: {fixed_total:.3f}\")\n    print(f\"Assignment cost total: {var_total:.3f}\")\n\n    # Capacity check\n    print(\"Load per opened centre (customers served):\")\n    for j in open_centres:\n        served = sum(1 for i in customers if x[i, j].X > 0.5)\n        print(f\"  SC{j}: {served} (cap {cap})\")\nelse:\n    print(f\"Optimization ended with status code {m.Status}\")",
+  "problem_type": "Facility Location Problem (FLP)",
+  "guidance": "**Facility Location Problem (FLP) \u2013 Modeling Instructions**\n\n1. **Decision Variables**\n   - Let \\( y_j \\in \\{0,1\\} \\) indicate if facility (plant) \\( j \\) is opened (\\( y_j = 1 \\)) or not (\\( y_j = 0 \\)).\n   - Let \\( x_{ij} \\geq 0 \\) denote the amount shipped from facility \\( j \\) to customer \\( i \\) (or, for assignment models, \\( x_{ij} \\in \\{0,1\\} \\) if customer \\( i \\) is assigned to facility \\( j \\)).\n\n2. **Objective Function**\n   - Minimize the total cost, which is the sum of fixed opening costs and variable shipping (or assignment) costs:\n     \\[\n     \\min \\sum_{j} f_j y_j + \\sum_{i} \\sum_{j} c_{ij} x_{ij}\n     \\]\n     where \\( f_j \\) is the fixed cost to open facility \\( j \\), and \\( c_{ij} \\) is the cost to serve customer \\( i \\) from facility \\( j \\).\n\n3. **Constraints**\n   - **Demand Satisfaction:** Each customer\u2019s demand must be fully met:\n     \\[\n     \\sum_{j} x_{ij} = d_i \\quad \\forall i\n     \\]\n     where \\( d_i \\) is the demand of customer \\( i \\).\n   - **Facility Capacity:** Do not exceed facility \\( j \\)\u2019s capacity if opened:\n     \\[\n     \\sum_{i} x_{ij} \\leq \\text{cap}_j y_j \\quad \\forall j\n     \\]\n     where \\( \\text{cap}_j \\) is the capacity of facility \\( j \\).\n   - **Assignment Only to Open Facilities:** Customers can only be served from open facilities:\n     \\[\n     x_{ij} \\leq d_i y_j \\quad \\forall i, j\n     \\]\n   - **Variable Domains:** \\( y_j \\in \\{0,1\\} \\), \\( x_{ij} \\geq 0 \\) (or binary for assignment).\n\nAdjust for uncapacitated/capacitated or assignment/transportation variants as needed.",
+  "formulation": "```python\nimport pandas as pd\nfrom pulp import *\n\n# ===============================\n# Capacitated Facility Location Problem (FLP)\n# ===============================\n\n# --- Data Loading ---\ncost_df = pd.read_csv('cost.csv')\ndemand_df = pd.read_csv('demand.csv')\n\n# --- Sets ---\nplants = cost_df['plant'].tolist()\ncustomers = demand_df['customer'].tolist()\n\n# --- Parameters ---\n# Fixed opening cost for each plant\nfixed_cost = dict(zip(cost_df['plant'], cost_df['fixed_cost']))\n\n# Capacity of each plant\ncapacity = dict(zip(cost_df['plant'], cost_df['capacity']))\n\n# Demand for each customer\ndemand = dict(zip(demand_df['customer'], demand_df['demand']))\n\n# Shipping cost: (plant, customer) -> cost\nshipping_cost = {}\nfor _, row in cost_df.iterrows():\n    for c in customers:\n        shipping_cost[(row['plant'], c)] = row[c]\n\n# --- Model ---\nmodel = LpProblem(\"Capacitated_Facility_Location\", LpMinimize)\n\n# --- Decision Variables ---\n# y[j] = 1 if plant j is opened, 0 otherwise\ny = LpVariable.dicts(\"OpenPlant\", plants, cat=LpBinary)\n# x[j, i] = amount shipped from plant j to customer i\nx = LpVariable.dicts(\"Ship\",\n                     [(j, i) for j in plants for i in customers],\n                     lowBound=0, cat=LpContinuous)\n\n# --- Objective Function ---\nmodel += (\n    lpSum(fixed_cost[j] * y[j] for j in plants) +\n    lpSum(shipping_cost[(j, i)] * x[(j, i)] for j in plants for i in customers)\n), \"Total_Cost\"\n\n# --- Constraints ---\n\n# 1. Demand satisfaction: each customer's demand must be fully met\nfor i in customers:\n    model += lpSum(x[(j, i)] for j in plants) == demand[i], f\"Demand_{i}\"\n\n# 2. Plant capacity: total shipped from plant cannot exceed its capacity if opened\nfor j in plants:\n    model += lpSum(x[(j, i)] for i in customers) <= capacity[j] * y[j], f\"Capacity_{j}\"\n\n# 3. Linking: cannot ship from a plant unless it is open\nfor j in plants:\n    for i in customers:\n        model += x[(j, i)] <= demand[i] * y[j], f\"Link_{j}_{i}\"\n\n# --- (Optional) Solve ---\n# model.solve()\n# print(\"Status:\", LpStatus[model.status])\n# print(\"Total Cost:\", value(model.objective))\n# for j in plants:\n#     if value(y[j]) > 0.5:\n#         print(f\"Plant {j} opened.\")\n#         for i in customers:\n#             if value(x[(j, i)]) > 1e-5:\n#                 print(f\"  Ships {value(x[(j, i)])} units to customer {i}\")\n\n# --- End of model ---\n```\n\n**Notes:**\n- All data is loaded from `cost.csv` and `demand.csv` using pandas.\n- All constraints are included:\n    - Demand satisfaction for each customer.\n    - Plant capacity (only if open).\n    - Linking (cannot ship from a plant unless it is open).\n- The model is as compact as possible, with no redundant constraints.\n- Each section is clearly commented.\n- The solve/output section is commented out for modularity.",
+  "verdict": "FAIL",
+  "assessment": "Let's rigorously validate the provided formulation for the Capacitated Facility Location Problem (FLP) on all four dimensions:\n\n---\n\n### 1. FEASIBILITY \u2014 Constraints\n\n**What is present:**\n- The code defines variables for plant opening (`y[j]`) and shipment quantities (`x[j,i]`).\n- Data for fixed costs, capacities, demands, and shipping costs is loaded.\n\n**What is missing or wrong:**\n- **No constraints are actually defined in the code.** The code snippet ends before any constraints are added to the model.\n    - **Demand satisfaction:** There is no constraint ensuring that each customer's demand is fully met.\n    - **Capacity:** There is no constraint ensuring that the total shipped from a plant does not exceed its capacity (and only if it is open).\n    - **Assignment:** There is no constraint linking shipments to plant opening (e.g., cannot ship from a closed plant).\n    - **Non-negativity:** There is no explicit non-negativity constraint on `x[j,i]` (though PuLP variables are non-negative by default unless specified otherwise).\n\n---\n\n### 2. OBJECTIVE\n\n**What is present:**\n- The model is set to `LpMinimize`, which is correct for a cost minimization problem.\n\n**What is missing or wrong:**\n- **No objective function is defined.** The code does not add any objective to the model.\n    - The objective should be:  \n      `sum_j fixed_cost[j] * y[j] + sum_{j,i} shipping_cost[j,i] * x[j,i]`\n\n---\n\n### 3. VARIABLES\n\n**What is present:**\n- `y[j]` is correctly defined as binary.\n- `x[j,i]` is defined, but the code is incomplete and does not specify bounds or category.\n\n**What is missing or wrong:**\n- The definition of `x[j,i]` is incomplete (the code snippet is cut off).\n- It is not clear if `x[j,i]` is continuous and non-negative (should be `lowBound=0, cat=LpContinuous`).\n\n---\n\n### 4. COMPLETENESS\n\n**What is present:**\n- Data loading and variable definitions are started.\n\n**What is missing or wrong:**\n- **No constraints.**\n- **No objective.**\n- **Incomplete variable definition.**\n- **No model solution or output.**\n- **No linkage between plant opening and shipment (i.e., `x[j,i] <= capacity[j] * y[j]`).**\n\n---\n\n## Summary of Issues\n\n- **No constraints are present.**\n- **No objective function is present.**\n- **Variable definition for `x[j,i]` is incomplete.**\n- **The model is not complete and cannot be solved as is.**\n\n**How to fix:**\n1. **Add demand satisfaction constraints:**  \n   For each customer `i`:  \n   `sum_j x[j,i] == demand[i]`\n2. **Add capacity constraints:**  \n   For each plant `j`:  \n   `sum_i x[j,i] <= capacity[j] * y[j]`\n3. **Define the objective function:**  \n   `model += lpSum(fixed_cost[j] * y[j] for j in plants) + lpSum(shipping_cost[(j,i)] * x[(j,i)] for j in plants for i in customers)`\n4. **Complete variable definition for `x[j,i]`:**  \n   `x = LpVariable.dicts(\"Ship\", [(j, i) for j in plants for i in customers], lowBound=0, cat=LpContinuous)`\n5. **Ensure all requirements are captured.**\n\n---\n\n**VERDICT: FAIL**",
+  "repairs": 2,
+  "repair_history": [
+    {
+      "attempt": 1,
+      "verdict_before": "FAIL",
+      "feedback": "Let's rigorously validate the provided (partial) formulation for the capacitated facility location problem.\n\n---\n\n### 1. FEASIBILITY\n\n#### **Constraints Present?**\nThe code is incomplete and does **not** show any constraints. The following constraints are required for a correct capacitated facility "
+    },
+    {
+      "attempt": 2,
+      "verdict_before": "FAIL",
+      "feedback": "Let's rigorously validate the provided formulation for the Capacitated Facility Location Problem (FLP) based on the four dimensions:\n\n---\n\n### 1. FEASIBILITY \u2014 Constraints\n\n**What is present:**\n- The code snippet is incomplete and does not show any constraints.\n- There is no evidence of:\n  - Demand "
+    }
+  ],
+  "triangle": {
+    "accuracy_score": 0.0,
+    "interpretability_score": 0.97,
+    "efficiency_score": 0.66,
+    "weighted_triangle_score": 0.423,
+    "weights": {
+      "accuracy": 0.5,
+      "interpretability": 0.3,
+      "efficiency": 0.2
+    },
+    "interpretability_detail": {
+      "score": 0.97,
+      "constraint_count": 6,
+      "variable_count": 2,
+      "comment_count": 30,
+      "has_meaningful_names": false,
+      "constraint_score": 1.0,
+      "variable_score": 1.0
+    },
+    "efficiency_detail": {
+      "score": 0.66,
+      "binary_count": 0,
+      "integer_count": 0,
+      "continuous_count": 0,
+      "has_bounds": true,
+      "has_big_m": false,
+      "type_score": 0.4,
+      "binary_score": 1.0
+    }
+  },
+  "execution": {
+    "execution_attempted": true,
+    "execution_success": true,
+    "generated_obj_value": null,
+    "ground_truth_obj_value": 150992.5,
+    "execution_correct": false,
+    "accuracy_pct": 0.0,
+    "code_extracted": true,
+    "stdout": "",
+    "stderr": ""
+  },
+  "tokens": {
+    "classifier_in": 2176,
+    "classifier_out": 7,
+    "instructor_in": 1391,
+    "instructor_out": 479,
+    "worker_in": 2216,
+    "worker_out": 717,
+    "validator_in": 1718,
+    "validator_out": 2024,
+    "repair_in": 5732,
+    "repair_out": 1535,
+    "total_in": 13233,
+    "total_out": 4762
+  }
+}

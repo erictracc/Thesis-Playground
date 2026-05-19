@@ -1,0 +1,81 @@
+{
+  "problem_id": "3",
+  "run_label": "v3_ollama",
+  "provider": "ollama",
+  "worker_model": "llama3.1:latest",
+  "problem_description": "There are 15 candidate plants F1\u2013F15. Each plant can either be built (opened) or not. Building a plant incurs a fixed opening cost, and this cost is charged only once per plant, independent of how many customers the plant eventually serves. Once a plant is opened, it may supply products to any customers, subject to its own capacity.\n\nThere are 15 customers C1\u2013C15 with fixed demands. If a plant is built, it incurs the fixed cost and can distribute to any number of customers. Shipping from plant i to customer j incurs a per-unit transport cost. The objective is to determine which plants should be built and how much to ship from each built plant to each customer in order to minimize the total cost, consisting of both fixed opening costs and variable transportation costs, while satisfying all customer demands and not exceeding the capacities of the opened plants.\n\nThe input data are given in two CSV files. cost.csv includes fixed_cost: opening cost of the plant (currency units; paid once if the plant is opened, regardless of the number of customers served). And capacity: plant capacity (maximum units the plant can supply). And also C1 \u2026 C15: per-unit transport cost from this plant to each customer. demand.csv includes demand of the customer (units) (C1-C15)",
+  "ground_truth": "import gurobipy as gp\nfrom gurobipy import GRB\n\n# ================================\n# Capacitated Facility Location (15 customers \u00d7 10 centres)\n# Capacity: each opened centre may serve at most 4 customers\n# Data consistent with the modeling and CSVs previously provided\n# ================================\n\n# Sets\ncustomers = range(1, 16)  # C1..C15\ncentres   = range(1, 11)  # SC1..SC10\n\n# Fixed opening costs F_j for centres SC1..SC10\nfixed_cost_list = [385.1, 546.3, 485.2, 448.1, 324.1, 323.9, 296.5, 522.7, 448.7, 478.7]\nfixed_cost = {j: fixed_cost_list[j-1] for j in centres}\n\n# Assignment (service) cost matrix c_{ij}: rows = customers C1..C15, cols = centres SC1..SC10\nservice_cost_matrix = [\n    # SC1   SC2   SC3   SC4   SC5   SC6   SC7   SC8   SC9   SC10\n    [15.1, 21.2, 14.9, 18.8, 22.9, 16.8, 16.5,  9.4, 16.1, 17.3],  # C1\n    [13.4, 16.3, 20.2, 19.6, 20.9, 22.1, 16.9,  9.4, 13.8, 11.7],  # C2\n    [15.2, 18.8, 14.7, 21.7, 18.1, 18.6, 12.3, 11.2, 11.9, 20.4],  # C3\n    [16.8, 19.1, 18.3, 18.8, 23.1, 15.7, 13.1,  8.6, 15.6, 22.2],  # C4\n    [13.4, 18.6, 20.8, 19.8, 22.1, 18.1, 16.7, 12.1, 11.4, 18.2],  # C5\n    [12.5, 22.5, 15.5, 14.9, 21.6, 21.3, 16.1, 10.7, 11.9, 14.6],  # C6\n    [12.1, 17.1, 19.8, 18.6, 22.1, 20.7, 20.5, 12.2, 15.4, 18.7],  # C7\n    [12.3, 15.7, 17.9, 21.3, 22.7, 15.3, 16.6, 11.4, 14.1, 20.1],  # C8\n    [16.3, 21.3, 17.6, 20.8, 21.8, 17.2, 15.5, 12.6, 19.9, 19.1],  # C9\n    [12.1, 18.7, 14.4, 20.1, 22.7, 14.1, 18.1, 11.4, 18.1, 17.4],  # C10\n    [16.7, 18.7, 15.7, 19.9, 24.2, 18.7, 14.2, 13.1, 14.7, 16.1],  # C11\n    [11.3, 23.8, 15.5, 17.3, 23.2, 17.7, 16.8, 14.5, 15.8, 17.8],  # C12\n    [15.1, 20.5, 15.1, 18.4, 20.6, 17.9, 14.5,  8.5, 14.9, 13.9],  # C13\n    [ 8.3, 20.7, 14.7, 20.4, 20.6, 14.8, 14.2, 11.5, 14.1, 15.1],  # C14\n    [12.1, 16.3, 16.4, 15.1, 21.3, 19.1, 19.5, 16.7, 11.1, 18.7],  # C15\n]\n\n# Build assignment cost dict {(i,j): c_ij}\nassign_cost = {(i, j): service_cost_matrix[i-1][j-1] for i in customers for j in centres}\n\n# Capacity: each opened centre can serve at most 4 customers\ncap = 4\n\n# ----------------\n# Model\n# ----------------\nm = gp.Model(\"Facility_Location_Capacity_4\")\n\n# Decision variables\ny = m.addVars(centres, vtype=GRB.BINARY, name=\"y\")                     # y_j = 1 if centre j is opened\nx = m.addVars(customers, centres, vtype=GRB.BINARY, name=\"x\")          # x_ij = 1 if customer i served by centre j\n\n# Objective: minimize total fixed + assignment costs\nm.setObjective(\n    gp.quicksum(fixed_cost[j] * y[j] for j in centres) +\n    gp.quicksum(assign_cost[(i, j)] * x[i, j] for i in customers for j in centres),\n    GRB.MINIMIZE\n)\n\n# Constraints:\n# 1) Each customer assigned to exactly one centre\nfor i in customers:\n    m.addConstr(gp.quicksum(x[i, j] for j in centres) == 1, name=f\"assign_{i}\")\n\n# 2) Assignment only allowed to open centres\nfor i in customers:\n    for j in centres:\n        m.addConstr(x[i, j] <= y[j], name=f\"openlink_{i}_{j}\")\n\n# 3) Capacity: each opened centre serves at most 4 customers\nfor j in centres:\n    m.addConstr(gp.quicksum(x[i, j] for i in customers) <= cap * y[j], name=f\"capacity_{j}\")\n\n# (Optional) MIP settings\n# m.Params.MIPFocus = 1\n# m.Params.TimeLimit = 60\n\n# Solve\nm.optimize()\n\n# ----------------\n# Reporting\n# ----------------\nif m.Status == GRB.OPTIMAL:\n    print(f\"Optimal objective value (total cost): {m.ObjVal:.3f}\")\n\n    open_centres = [j for j in centres if y[j].X > 0.5]\n    print(f\"Opened centres: {open_centres}\")\n\n    # Customer \u2192 Centre assignment\n    assignment = {}\n    for i in customers:\n        for j in centres:\n            if x[i, j].X > 0.5:\n                assignment[i] = j\n                break\n\n    print(\"Assignments (customer -> centre):\")\n    for i in customers:\n        print(f\"  C{i} -> SC{assignment[i]} (cost {assign_cost[(i, assignment[i])]:.1f})\")\n\n    # Cost breakdown\n    fixed_total = sum(fixed_cost[j] for j in open_centres)\n    var_total = sum(assign_cost[(i, assignment[i])] for i in customers)\n    print(f\"Fixed cost total: {fixed_total:.3f}\")\n    print(f\"Assignment cost total: {var_total:.3f}\")\n\n    # Capacity check\n    print(\"Load per opened centre (customers served):\")\n    for j in open_centres:\n        served = sum(1 for i in customers if x[i, j].X > 0.5)\n        print(f\"  SC{j}: {served} (cap {cap})\")\nelse:\n    print(f\"Optimization ended with status code {m.Status}\")",
+  "problem_type": "Facility Location Problem (FLP)",
+  "guidance": "Here are the concise structured instructions for formulating the Facility Location Problem (FLP):\n\n**Decision Variables:**\n\n1. Binary variable `y_i` for each facility `i`: 1 if the facility is built, 0 otherwise.\n2. Continuous variable `x_ij` for each facility `i` and customer `j`: amount of product shipped from facility `i` to customer `j`.\n\n**Objective Function:**\n\n1. Minimize the total cost, consisting of both fixed opening costs and variable transportation costs.\n2. Formulate the objective function as the sum of:\n\t* Fixed opening costs: `\u2211_i fixed_cost_i * y_i`\n\t* Variable transportation costs: `\u2211_i \u2211_j c_ij * x_ij`\n\n**Constraints:**\n\n1. **Capacity constraints**: each opened facility `i` can serve at most `K` customers, where `K` is a given capacity limit.\n\t* `\u2211_j x_ij \u2264 K * y_i` for each facility `i`.\n2. **Demand constraints**: each customer `j` must be assigned to exactly one facility `i`.\n\t* `\u2211_i x_ij = demand_j` for each customer `j`.\n3. **Non-negativity constraints**: `x_ij \u2265 0` for each facility `i` and customer `j`.\n4. **Binary constraints**: `y_i \u2208 {0, 1}` for each facility `i`.\n\nNote: The specific formulation may vary depending on the problem instance and the desired level of detail. These instructions provide a general outline for formulating the FLP.",
+  "formulation": "Here is the complete Python PuLP formulation for the Facility Location Problem (FLP) based on the provided instructions and data files:\n\n```python\nimport pandas as pd\nfrom pulp import LpMaximize, LpProblem, lpSum, LpVariable\n\n# Read data from CSV files\ndata = pd.read_csv('cost.csv')\ncustomer_demands = pd.read_csv('demand.csv')['demand'].tolist()\n\n# Define sets\nplants = data['plant'].tolist()\ncustomers = [f'C{i}' for i in range(1, 16)]\n\n# Define variables\ny = LpVariable.dicts('y', plants, 0, 1, cat='Binary')\nx = LpVariable.dicts('x', [(plant, customer) for plant in plants for customer in customers], 0, None, cat='Continuous')\n\n# Define the model\nmodel = LpProblem(name='FLP', sense=LpMaximize)\n\n# Objective function\nmodel += lpSum([data.loc[data['plant'] == plant, 'fixed_cost'].values[0] * y[plant] for plant in plants]) + \\\n        lpSum([data.loc[data['plant'] == plant, customer].values[0] * x[(plant, customer)] for plant in plants for customer in customers])\n\n# Capacity constraints\nfor i in range(len(plants)):\n    model += lpSum([x[(plants[i], 'C' + str(j))] for j in range(1, 16)]) <= data.loc[data['plant'] == plants[i], 'capacity'].values[0] * y[plants[i]]\n\n# Demand constraints\nfor j in range(1, 16):\n    model += lpSum([x[(plants[i], 'C' + str(j))] for i in range(len(plants))]) == customer_demands[j-1]\n\n# Non-negativity constraints\nfor i in range(len(plants)):\n    for j in range(1, 16):\n        model += x[(plants[i], 'C' + str(j))] >= 0\n\n# Solve the model\nmodel.solve()\n\n# Print the objective value\nprint(f'Objective value: {value(model.objective):.4f}')\n```\n\nThis code defines the sets, variables, and constraints as specified in the instructions. It also includes the objective function, capacity constraints, demand constraints, and non-negativity constraints. The model is then solved using the `solve()` method, and the objective value is printed to the console.",
+  "verdict": "PARTIAL",
+  "assessment": "VERDICT: PARTIAL\n\nFeedback:\n\n1. FEASIBILITY: The constraints are mostly present and semantically correct. However, the capacity constraints are not properly defined. The current formulation assumes that the capacity of each plant is a single value, which is not specified in the problem statement. To fix this, you need to define the capacity for each plant separately. Here's the corrected line for the capacity constraint:\n\n```python\nfor i in range(len(plants)):\n    model += lpSum([x[(plants[i], 'C' + str(j))] for j in range(1, 16)]) <= data.loc[data['plant'] == plants[i], 'capacity'].values[i] * y[plants[i]]\n```\n\n2. OBJECTIVE: The objective function is correctly set to maximize the profit. However, the profit calculation is not explicitly defined in the code. You need to define the profit for each customer-plant pair and include it in the objective function. Here's an example of how to define the profit and update the objective function:\n\n```python\nprofit_per_customer = pd.read_csv('profit.csv')['profit'].tolist()\n\n# Objective function\nmodel += lpSum([profit_per_customer[j-1] * x[(plant, 'C' + str(j))] for j in range(1, 16) for plant in plants])\n```\n\n3. VARIABLES: The decision variables are correctly defined as binary variables for the plant opening decision and continuous variables for the customer-plant assignments. The variable types and bounds are appropriate for this problem.\n\n4. COMPLETENESS: The formulation captures most of the problem requirements. However, the code does not include the fixed opening cost for each plant. You need to add this cost to the objective function. Here's the updated objective function:\n\n```python\n# Objective function\nmodel += lpSum([data.loc[data['plant'] == plant, 'fixed_cost'].values[0] * y[plant] for plant in plants]) + \\\n        lpSum([profit_per_customer[j-1] * x[(plant, 'C' + str(j))] for j in range(1, 16) for plant in plants])\n```\n\nAdditionally, the code does not include the logic to ensure that each customer is served by exactly one plant. You need to add this constraint:\n\n```python\n# Each customer is served by exactly one plant\nfor j in range(1, 16):\n    model += lpSum([x[(plants[i], 'C' + str(j))] for i in range(len(plants))]) == 1\n```\n\nAfter making these corrections, the formulation should be complete and accurate.",
+  "repairs": 2,
+  "repair_history": [
+    {
+      "attempt": 1,
+      "verdict_before": "PARTIAL",
+      "feedback": "VERDICT: PARTIAL\n\n\nThe provided formulation has several issues that need to be addressed:\n\n\n1. FEASIBILITY:\n\n   - The constraints for customer demands and plant capacities are not correctly implemented. The constraints should ensure that the sum of products shipped from all plants to each customer d"
+    },
+    {
+      "attempt": 2,
+      "verdict_before": "PARTIAL",
+      "feedback": "VERDICT: PARTIAL\n\n\nThe formulation provided for the Facility Location Problem (FLP) has several issues that need to be addressed:\n\n\n1. FEASIBILITY:\n\nThe constraints are not semantically correct. The capacity constraints should ensure that the sum of products shipped from a plant to all customers doe"
+    }
+  ],
+  "triangle": {
+    "accuracy_score": 0.5,
+    "interpretability_score": 0.97,
+    "efficiency_score": 0.56,
+    "weighted_triangle_score": 0.653,
+    "weights": {
+      "accuracy": 0.5,
+      "interpretability": 0.3,
+      "efficiency": 0.2
+    },
+    "interpretability_detail": {
+      "score": 0.97,
+      "constraint_count": 5,
+      "variable_count": 3,
+      "comment_count": 10,
+      "has_meaningful_names": false,
+      "constraint_score": 1.0,
+      "variable_score": 1.0
+    },
+    "efficiency_detail": {
+      "score": 0.56,
+      "binary_count": 0,
+      "integer_count": 0,
+      "continuous_count": 0,
+      "has_bounds": false,
+      "has_big_m": false,
+      "type_score": 0.4,
+      "binary_score": 1.0
+    }
+  },
+  "execution": {
+    "execution_attempted": true,
+    "execution_success": false,
+    "generated_obj_value": null,
+    "ground_truth_obj_value": 150992.5,
+    "execution_correct": false,
+    "accuracy_pct": 0.0,
+    "code_extracted": true,
+    "stdout": "Welcome to the CBC MILP Solver \nVersion: 2.10.3 \nBuild Date: Dec 15 2019 \n\ncommand line - C:\\Users\\erict\\AppData\\Roaming\\Python\\Python314\\site-packages\\pulp\\apis\\../solverdir/cbc/win/i64/cbc.exe C:\\Users\\erict\\AppData\\Local\\Temp\\0368b16f6db441d28405a52ef8b3e822-pulp.mps -max -timeMode elapsed -branch -printingOptions all -solution C:\\Users\\erict\\AppData\\Local\\Temp\\0368b16f6db441d28405a52ef8b3e822-pulp.sol (default strategy 1)\nAt line 2 NAME          MODEL\nAt line 3 ROWS\nAt line 260 COLUMNS\nAt li",
+    "stderr": "Traceback (most recent call last):\n  File \"C:\\Users\\erict\\AppData\\Local\\Temp\\tmpidhq7t9l.py\", line 40, in <module>\n    print(f'Objective value: {value(model.objective):.4f}')\n                              ^^^^^\nNameError: name 'value' is not defined. Did you mean: 'False'?\n"
+  },
+  "tokens": {
+    "classifier_in": 2313,
+    "classifier_out": 9,
+    "instructor_in": 1483,
+    "instructor_out": 334,
+    "worker_in": 2226,
+    "worker_out": 692,
+    "validator_in": 3289,
+    "validator_out": 2215,
+    "repair_in": 5755,
+    "repair_out": 1121,
+    "total_in": 15066,
+    "total_out": 4371
+  }
+}

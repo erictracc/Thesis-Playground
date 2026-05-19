@@ -1,0 +1,18 @@
+{
+  "3": {
+    "optimal_value": 150992.5,
+    "status": "solved"
+  },
+  "5": {
+    "optimal_value": 1555.5,
+    "status": "solved"
+  },
+  "9": {
+    "optimal_value": 3148.93,
+    "status": "solved"
+  },
+  "10": {
+    "optimal_value": 1577.6,
+    "status": "solved"
+  }
+}
